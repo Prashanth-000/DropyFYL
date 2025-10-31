@@ -92,6 +92,7 @@ AWS_REGION=your_aws_region
 S3_BUCKET_NAME=your_bucket_name
 
 npm start
+```
 open frontend in 2 separate browser tabs to test real-time features.
 
 
