@@ -435,7 +435,7 @@ export default function RoomPage() {
               >
                 <span>
                   <a
-                    href={`${BACKEND_URL}/uploads/${f.storedName}`}
+                    href={`${BACKEND_URL}/api/rooms/${roomId}/files/${f._id}/download`}
                     download={f.originalName}
                     style={{ color: "var(--accent-2)" }}
                   >

@@ -6,10 +6,11 @@ const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
-const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 const AWS = require("aws-sdk");
+const { S3Client } = require("@aws-sdk/client-s3");
+const multer = require("multer");
 const multerS3 = require("multer-s3");
 
 const Room = require("./models/Room");
@@ -37,11 +38,32 @@ mongoose.connect(process.env.MONGO_URL, {
 .then(() => console.log("MongoDB connected"))
 .catch(err => console.log("MongoDB connection error:", err));
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, "uploads/"),
-  filename: (req, file, cb) => cb(null, Date.now() + "_" + file.originalname)
+
+AWS.config.update({
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  region: process.env.AWS_REGION,
 });
-const upload = multer({ storage });
+
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  },
+});
+
+const upload = multer({
+  storage: multerS3({
+    s3: s3,
+    bucket: process.env.S3_BUCKET_NAME,
+    key: (req, file, cb) => {
+      const filename = Date.now().toString() + "-" + file.originalname;
+      cb(null, filename);
+    },
+  }),
+});
+
 
 const onlineUsers = {};
 
@@ -173,15 +195,20 @@ app.post("/api/rooms/:roomId/files", upload.single("file"), async (req, res) => 
   try {
     const { roomId } = req.params;
     const { username } = req.body;
-    if (!req.file) return res.status(400).send("No file uploaded");
+
+    if (!req.file || !req.file.location) {
+      return res.status(400).send("No file uploaded");
+    }
+
     const file = new File({
       roomId,
       uploadedBy: username,
       originalName: req.file.originalname,
-      storedName: req.file.filename
+      storedName: req.file.key,
+      fileUrl: req.file.location,
     });
+
     await file.save();
-    console.log('[FILE SAVED]', { _id: file._id, roomId: file.roomId, originalName: file.originalName, uploadedBy: file.uploadedBy });
     io.to(roomId).emit("newFile", file);
     res.json(file);
   } catch (err) {
@@ -189,6 +216,7 @@ app.post("/api/rooms/:roomId/files", upload.single("file"), async (req, res) => 
     res.status(500).send("File upload failed");
   }
 });
+
 
 app.get('/api/rooms/:roomId/files', async (req, res) => {
   try {
@@ -201,6 +229,7 @@ app.get('/api/rooms/:roomId/files', async (req, res) => {
     res.status(500).send('Failed to list files');
   }
 });
+
 
 app.get('/api/rooms/:roomId/messages', async (req, res) => {
   try {
@@ -223,29 +252,51 @@ app.get('/api/rooms/:roomId/messages', async (req, res) => {
   }
 });
 
-app.get("/api/rooms/:roomId/files/:fileId/download", async (req, res) => {
-  const { fileId } = req.params;
-  const file = await File.findById(fileId);
-  if (!file) return res.status(404).send("File not found");
-  res.download(path.join(__dirname, "uploads", file.storedName), file.originalName);
-});
 
-app.delete('/api/rooms/:roomId/files/:fileId', async (req, res) => {
+const { GetObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+app.get("/api/rooms/:roomId/files/:fileId/download", async (req, res) => {
   try {
-    const { roomId, fileId } = req.params;
+    const { fileId } = req.params;
     const file = await File.findById(fileId);
-    if (!file) return res.status(404).send('File not found');
-    const p = path.join(__dirname, 'uploads', file.storedName);
-    try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch(e){ console.warn('unlink failed', p, e.message); }
-    await File.deleteOne({ _id: fileId });
-    io.to(roomId).emit('fileDeleted', { fileId });
-    res.sendStatus(200);
+    if (!file) return res.status(404).send("File not found");
+
+    const command = new GetObjectCommand({
+      Bucket: process.env.S3_BUCKET_NAME,
+      Key: file.storedName,
+    });
+    const url = await getSignedUrl(s3, command, { expiresIn: 60 });
+    res.redirect(url);
   } catch (err) {
-    console.error('Error deleting file', err);
-    res.status(500).send('Failed to delete file');
+    console.error("Download error:", err);
+    res.status(500).send("Failed to download file");
   }
 });
 
+
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+
+app.delete("/api/rooms/:roomId/files/:fileId", async (req, res) => {
+  try {
+    const { fileId } = req.params;
+    const file = await File.findById(fileId);
+    if (!file) return res.status(404).send("File not found");
+
+    const deleteCommand = new DeleteObjectCommand({
+      Bucket: process.env.S3_BUCKET_NAME,
+      Key: file.storedName,
+    });
+    await s3.send(deleteCommand);
+
+    await File.findByIdAndDelete(fileId);
+
+    res.json({ message: "File deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting file", err);
+    res.status(500).send("Failed to delete file");
+  }
+});
 io.on("connection", socket => {
   socket.on("joinRoom", ({ roomId, username, isCreator }) => {
     socket.join(roomId);
