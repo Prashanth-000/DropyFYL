@@ -20,19 +20,21 @@ const File = require("./models/File");
 
 const app = express();
 const server = http.createServer(app);
-const FRONTEND_URL = process.env.FRONTEND_URL
+const FRONTEND = process.env.FRONTEND_URL
 
 const io = new Server(server, {
   cors: {
-    origin: FRONTEND_URL,
+    origin: FRONTEND,
     methods: ["GET", "POST"]
   }
 });
 
 app.use(cors({
-  origin: "*"
+  origin: FRONTEND,
+  methods: ["GET", "POST", "PUT", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true
 }));
-
 
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
