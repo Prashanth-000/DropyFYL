@@ -4,18 +4,7 @@ import io from "socket.io-client";
 import { BACKEND_URL } from "../config";
 import axios from "axios";
 
-
-const [socket, setSocket] = useState(null);
-
-useEffect(() => {
-  const s = io(BACKEND_URL, { transports: ["websocket"], withCredentials: true });
-  setSocket(s);
-
-  return () => {
-    s.disconnect();
-  };
-}, []);
-
+const socket = io(BACKEND_URL, { transports: ["websocket"] });
 
 export default function RoomPage() {
   const { roomId } = useParams();
